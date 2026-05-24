@@ -55,7 +55,7 @@
 
     <!-- UPLOAD -->
     <div class="card text-center mb-4">
-        <h2 class="mb-3">🎥 Video Stabilization</h2>
+        <h2 class="mb-3"> Video Stabilization</h2>
         <p class="text-muted">Upload video bị rung để làm mượt</p>
 
         <form method="POST" enctype="multipart/form-data">
@@ -66,21 +66,21 @@
             </div>
 
             <button type="submit" class="btn btn-custom w-100">
-                🚀 Upload & Stabilize
+                 Upload & Stabilize
             </button>
         </form>
     </div>
 
     <!-- BEFORE & AFTER -->
     {% if output_video %}
-    <div class="section-title">🎯 So sánh Before / After</div>
+    <div class="section-title"> So sánh Before / After</div>
 
     <div class="row">
 
         <!-- BEFORE -->
         <div class="col-md-6 mb-3">
             <div class="card">
-                <div class="video-title">🎥 Before (Original)</div>
+                <div class="video-title"> Before (Original)</div>
                 {% if input_video %}
                 <video width="100%" controls>
                     <source src="{{ input_video }}" type="video/mp4">
@@ -92,7 +92,7 @@
         <!-- AFTER -->
         <div class="col-md-6 mb-3">
             <div class="card">
-                <div class="video-title">✨ After (Stabilized)</div>
+                <div class="video-title"> After (Stabilized)</div>
                 <video width="100%" controls>
                     <source src="{{ output_video }}" type="video/mp4">
                 </video>
@@ -104,7 +104,7 @@
 
     <!-- COMPARE VIDEO -->
     {% if compare_video %}
-    <div class="section-title mt-4">🔥 Video So Sánh Trực Tiếp</div>
+    <div class="section-title mt-4"> Video So Sánh Trực Tiếp</div>
 
     <div class="card">
         <div class="video-title">Before vs After (Split Screen)</div>
@@ -113,10 +113,38 @@
         </video>
     </div>
     {% endif %}
-    {% if score %}
+   {% if score %}
 <div class="card mt-4 text-center">
-    <h4>📊 Độ ổn định video</h4>
+    <h4>Độ ổn định video</h4>
     <h2 style="color:green;">{{ score }}% cải thiện</h2>
+</div>
+{% endif %}
+
+{% if before_mean %}
+<div class="card mt-4">
+    <h4 class="text-center mb-3">Bảng số liệu đánh giá</h4>
+
+    <table class="table table-bordered text-center">
+        <thead class="table-dark">
+            <tr>
+                <th>Chỉ số</th>
+                <th>Trước (Before)</th>
+                <th>Sau (After)</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>Mean (Độ rung TB)</td>
+                <td>{{ before_mean }}</td>
+                <td>{{ after_mean }}</td>
+            </tr>
+            <tr>
+                <td>Std (Độ lệch chuẩn)</td>
+                <td>{{ before_std }}</td>
+                <td>{{ after_std }}</td>
+            </tr>
+        </tbody>
+    </table>
 </div>
 {% endif %}
 </div>

@@ -1,266 +1,331 @@
 import cv2
 import numpy as np
 import os
+from scipy.ndimage import gaussian_filter1d #
+import pandas as pd
+def measure_shakiness(video_path): # Đo độ rung của video để điều chỉnh tham số ổn định
+        cap = cv2.VideoCapture(video_path)
 
-
-# ================== MEASURE ==================
-def measure_shakiness(video_path):
-    cap = cv2.VideoCapture(video_path)
-
-    ret, prev = cap.read()
-    if not ret:
-        return None, None
-
-    prev_gray = cv2.cvtColor(prev, cv2.COLOR_BGR2GRAY)
-
-    motions = []
-
-    while True:
-        ret, frame = cap.read()
+        ret, prev = cap.read()
         if not ret:
-            break
+            return None, None
 
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        prev_gray = cv2.cvtColor(prev, cv2.COLOR_BGR2GRAY) #Chuyển frame đầu tiên sang ảnh xám để giảm dữ liệu và dễ tính chuyển động
 
-        flow = cv2.calcOpticalFlowFarneback(
-            prev_gray, gray,
-            None, 0.5, 3, 15, 3, 5, 1.2, 0
-        )
+        motions = [] #Lưu trữ độ rung của từng frame để tính trung bình và độ lệch chuẩn
 
-        dx = np.mean(flow[..., 0])
-        dy = np.mean(flow[..., 1])
+        while True:
+            ret, frame = cap.read() 
+            if not ret:
+                break
 
-        motion = np.sqrt(dx**2 + dy**2)
-        motions.append(motion)
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) 
 
-        prev_gray = gray
-
-    cap.release()
-
-    return np.mean(motions), np.std(motions)
-
-
-# ================== STABILIZE ==================
-def stabilize_video(input_path, output_path):
-    import cv2
-    import numpy as np
-    from scipy.ndimage import gaussian_filter1d
-    import os
-
-    cap = cv2.VideoCapture(input_path)
-
-    if not cap.isOpened():
-        print("❌ Cannot open video")
-        return None
-
-    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    fps = cap.get(cv2.CAP_PROP_FPS)
-    if fps <= 0 or fps > 60:
-        fps = 30
-
-    ret, prev = cap.read()
-    if not ret:
-        return None
-
-    prev_gray = cv2.cvtColor(prev, cv2.COLOR_BGR2GRAY)
-
-    transforms = []
-
-    print("🔍 Estimating motion (PRO)...")
-
-    # ================= PASS 1 =================
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
-
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-
-        try:
-            warp = np.eye(2, 3, dtype=np.float32)
-
-            _, warp = cv2.findTransformECC(
-                prev_gray, gray, warp,
-                cv2.MOTION_AFFINE,
-                (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 50, 1e-6)
-            )
-
-            dx = warp[0, 2]
-            dy = warp[1, 2]
-            da = np.arctan2(warp[1, 0], warp[0, 0])
-
-        except:
-            # 🔥 fallback Optical Flow
             flow = cv2.calcOpticalFlowFarneback(
-                prev_gray, gray, None,
-                0.5, 3, 15, 3, 5, 1.2, 0
-            )
+                prev_gray, gray,
+                None, 0.5, 3, 15, 3, 5, 1.2, 0
+            ) #Tính toán trường chuyển động quang học giữa frame trước đó và frame hiện tại để ước lượng chuyển động của camera
+
             dx = np.mean(flow[..., 0])
             dy = np.mean(flow[..., 1])
-            da = 0
 
-        transforms.append([dx, dy, da])
-        prev_gray = gray
+            motion = np.sqrt(dx**2 + dy**2) #Tính độ rung tổng thể của frame hiện tại dựa trên chuyển động trung bình theo trục x và y
+            motions.append(motion) #Lưu trữ độ rung của frame hiện tại
 
-    cap.release()
+            prev_gray = gray #Cập nhật frame trước đó để so sánh với frame tiếp theo
 
-    transforms = np.array(transforms)
+        cap.release()
 
-    # ================= TRAJECTORY =================
-    trajectory = np.cumsum(transforms, axis=0)
+        return np.mean(motions), np.std(motions)
+def stabilize_video(input_path, output_path): #Ổn định video bằng cách ước lượng chuyển động giữa các frame,
+        cap = cv2.VideoCapture(input_path)
 
-    # ================= ADAPTIVE SMOOTH =================
-    motion_strength = np.mean(np.abs(transforms[:, :2]))
+        if not cap.isOpened():
+            print("Cannot open video")
+            return None
 
-    if motion_strength > 5:
-        sigma = 40
-        crop_ratio = 0.12
-    else:
-        sigma = 20
-        crop_ratio = 0.06
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        fps = cap.get(cv2.CAP_PROP_FPS)
 
-    print(f"⚙️ Adaptive smoothing sigma={sigma}, crop={crop_ratio}")
+        if fps <= 0 or fps > 60:
+            fps = 30
 
-    smoothed = np.copy(trajectory)
-    for i in range(3):
-        smoothed[:, i] = gaussian_filter1d(trajectory[:, i], sigma=sigma)
+        ret, prev = cap.read()
+        if not ret:
+            cap.release()
+            return None
 
-    diff = smoothed - trajectory
-    transforms_smooth = transforms + diff
+        prev_gray = cv2.cvtColor(prev, cv2.COLOR_BGR2GRAY)
+        transforms = []
 
-    # ================= PASS 2 =================
-    cap = cv2.VideoCapture(input_path)
+        print(f"Total frames: {total_frames}")
+        print("Estimating motion...")
 
-    out = cv2.VideoWriter(
-        output_path,
-        cv2.VideoWriter_fourcc(*'mp4v'),
-        fps,
-        (w, h)
-    )
+        frame_idx = 1
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
 
-    def fix_border(frame):
-        h_, w_ = frame.shape[:2]
-        crop = frame[
-            int(crop_ratio*h_):int((1-crop_ratio)*h_),
-            int(crop_ratio*w_):int((1-crop_ratio)*w_)
-        ]
-        return cv2.resize(crop, (w_, h_))
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-    print("🎥 Stabilizing PRO...")
+            try:
+                warp = np.eye(2, 3, dtype=np.float32)
+                _, warp = cv2.findTransformECC(
+                    prev_gray,
+                    gray,
+                    warp,
+                    cv2.MOTION_AFFINE,
+                    (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 50, 1e-6)
+                )
+                dx = warp[0, 2]
+                dy = warp[1, 2]
+                da = np.arctan2(warp[1, 0], warp[0, 0])
 
-    i = 0
+            except Exception:
+                flow = cv2.calcOpticalFlowFarneback(
+                    prev_gray, gray, None,
+                    0.5, 3, 15, 3, 5, 1.2, 0
+                )
+                dx = np.mean(flow[..., 0])
+                dy = np.mean(flow[..., 1])
+                da = 0
 
-    while True:
-        ret, frame = cap.read()
-        if not ret or i >= len(transforms_smooth):
-            break
+            transforms.append([dx, dy, da])
+            prev_gray = gray
+            frame_idx += 1
 
-        dx, dy, da = transforms_smooth[i]
+            print(f"Estimated: {frame_idx}/{total_frames}", end="\r")
 
-        # 🔥 hạn chế over warp
-        dx = np.clip(dx, -50, 50)
-        dy = np.clip(dy, -50, 50)
-        da = np.clip(da, -0.3, 0.3)
+        print()
+        cap.release()
 
-        center = (w // 2, h // 2)
+        if len(transforms) == 0:
+            return None
 
-        m = cv2.getRotationMatrix2D(center, np.degrees(da), 1)
-        m[0, 2] += dx
-        m[1, 2] += dy
+        transforms = np.array(transforms)
+        trajectory = np.cumsum(transforms, axis=0)
 
-        stabilized = cv2.warpAffine(
-            frame,
-            m,
-            (w, h),
-            flags=cv2.INTER_LINEAR,
-            borderMode=cv2.BORDER_REPLICATE
+        motion_strength = np.mean(np.abs(transforms[:, :2]))
+
+        if motion_strength > 5:
+            sigma = 40
+            crop_ratio = 0.12
+        else:
+            sigma = 20
+            crop_ratio = 0.06
+
+        print(f"Adaptive smoothing sigma={sigma}, crop={crop_ratio}")
+
+        smoothed = np.copy(trajectory)
+        for i in range(3):
+            smoothed[:, i] = gaussian_filter1d(trajectory[:, i], sigma=sigma)
+
+        diff = smoothed - trajectory
+        transforms_smooth = transforms + diff
+
+        cap = cv2.VideoCapture(input_path)
+        if not cap.isOpened():
+            return None
+
+        out = cv2.VideoWriter(
+            output_path,
+            cv2.VideoWriter_fourcc(*'mp4v'),
+            fps,
+            (w, h)
         )
 
-        stabilized = fix_border(stabilized)
+        def fix_border(frame):
+            h_, w_ = frame.shape[:2]
+            y1 = int(crop_ratio * h_)
+            y2 = int((1 - crop_ratio) * h_)
+            x1 = int(crop_ratio * w_)
+            x2 = int((1 - crop_ratio) * w_)
 
-        out.write(stabilized)
-        i += 1
+            crop = frame[y1:y2, x1:x2]
+            return cv2.resize(crop, (w_, h_))
 
-    cap.release()
-    out.release()
+        print("Stabilizing...")
 
-    print("✅ DONE PRO:", output_path)
+        ret, first_frame = cap.read()
+        if not ret:
+            cap.release()
+            out.release()
+            return None
 
-    # ================= ENCODE =================
-    fixed_output = output_path.replace(".mp4", "_fixed.mp4")
+        first_frame = fix_border(first_frame)
+        cv2.putText(
+            first_frame,
+            "Frame: 1",
+            (20, 40),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            1,
+            (0, 255, 255),
+            2
+        )
+        cv2.imshow("Stabilizing Preview", first_frame)
+        out.write(first_frame)
 
-    os.system(
-        f'ffmpeg -y -i "{output_path}" -vcodec libx264 -crf 18 -preset slow -pix_fmt yuv420p "{fixed_output}"'
-    )
+        if cv2.waitKey(1) & 0xFF == 27:
+            cap.release()
+            out.release()
+            cv2.destroyAllWindows()
+            return output_path
 
-    if os.path.exists(fixed_output):
-        print("🎬 FINAL:", fixed_output)
-        return fixed_output
+        i = 0
+        while True:
+            ret, frame = cap.read()
+            if not ret or i >= len(transforms_smooth):
+                break
 
-    return output_path
-def create_comparison_video(input_path, stabilized_path, output_path):
-    cap1 = cv2.VideoCapture(input_path)
-    cap2 = cv2.VideoCapture(stabilized_path)
+            dx, dy, da = transforms_smooth[i]
 
-    if not cap1.isOpened() or not cap2.isOpened():
-        return None
+            dx = np.clip(dx, -50, 50)
+            dy = np.clip(dy, -50, 50)
+            da = np.clip(da, -0.3, 0.3)
 
-    w = int(cap1.get(cv2.CAP_PROP_FRAME_WIDTH))
-    h = int(cap1.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            center = (w // 2, h // 2)
 
-    fps = cap1.get(cv2.CAP_PROP_FPS)
-    if fps <= 0 or fps > 60:
-        fps = 30
+            m = cv2.getRotationMatrix2D(center, np.degrees(da), 1)
+            m[0, 2] += dx
+            m[1, 2] += dy
 
-    out = cv2.VideoWriter(
-        output_path,
-        cv2.VideoWriter_fourcc(*'mp4v'),
-        fps,
-        (w * 2, h)
-    )
+            stabilized = cv2.warpAffine(
+                frame,
+                m,
+                (w, h),
+                flags=cv2.INTER_LINEAR,
+                borderMode=cv2.BORDER_REPLICATE
+            )
 
-    frame_count = 0
+            stabilized = fix_border(stabilized)
 
-    while True:
-        ret1, f1 = cap1.read()
-        ret2, f2 = cap2.read()
+            preview = stabilized.copy()
+            cv2.putText(
+                preview,
+                f"Frame: {i + 2}/{total_frames}",
+                (20, 40),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                1,
+                (0, 255, 255),
+                2
+            )
 
-        if not ret1 or not ret2:
-            break
+            cv2.imshow("Stabilizing Preview", preview)
 
-        f1 = cv2.resize(f1, (w, h))
-        f2 = cv2.resize(f2, (w, h))
+            out.write(stabilized)
+            print(f"Stabilized: {i + 2}/{total_frames}", end="\r")
 
-        cv2.putText(f1, "Before", (20, 40),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+            if cv2.waitKey(1) & 0xFF == 27:
+                print("\nStopped by user")
+                break
 
-        cv2.putText(f2, "After", (20, 40),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+            i += 1
 
-        combined = np.hstack((f1, f2))
+        print()
+        cap.release()
+        out.release()
+        cv2.destroyAllWindows()
+        print("DONE:", output_path)
 
-        # line giữa
-        cv2.line(combined, (w, 0), (w, h), (255, 255, 255), 2)
+        fixed_output = output_path.replace(".mp4", "_fixed.mp4")
 
-        out.write(combined)
-        frame_count += 1
+        os.system(
+            f'ffmpeg -y -i "{output_path}" -vcodec libx264 -crf 18 -preset slow -pix_fmt yuv420p "{fixed_output}"'
+        )
 
-    cap1.release()
-    cap2.release()
-    out.release()
+        if os.path.exists(fixed_output):
+            print("FINAL:", fixed_output)
+            return fixed_output
 
-    if frame_count == 0:
-        return None
+        return output_path
 
-    # encode web
-    fixed_output = output_path.replace(".mp4", "_fixed.mp4")
+def create_comparison_video(input_path, stabilized_path, output_path): #Tạo video so sánh giữa video gốc và video đã ổn định bằng cách ghép hai video lại với nhau và thêm chú thích
+        cap1 = cv2.VideoCapture(input_path)
+        cap2 = cv2.VideoCapture(stabilized_path)
 
-    os.system(
-        f'ffmpeg -y -i "{output_path}" -vcodec libx264 -crf 23 -preset fast -pix_fmt yuv420p "{fixed_output}"'
-    )
+        if not cap1.isOpened() or not cap2.isOpened():
+            return None
 
-    if os.path.exists(fixed_output):
-        return fixed_output
+        w = int(cap1.get(cv2.CAP_PROP_FRAME_WIDTH))
+        h = int(cap1.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-    return output_path
+        fps = cap1.get(cv2.CAP_PROP_FPS)
+        if fps <= 0 or fps > 60:
+            fps = 30
+
+        out = cv2.VideoWriter(
+            output_path,
+            cv2.VideoWriter_fourcc(*'mp4v'),
+            fps,
+            (w * 2, h)
+        )
+
+        frame_count = 0
+
+        while True:
+            ret1, f1 = cap1.read()
+            ret2, f2 = cap2.read()
+
+            if not ret1 or not ret2:
+                break
+            f1 = cv2.resize(f1, (w, h))
+            f2 = cv2.resize(f2, (w, h))
+            cv2.putText(f1, "Before", (20, 40),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+            cv2.putText(f2, "After", (20, 40),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+            combined = np.hstack((f1, f2))
+            # line giữa
+            cv2.line(combined, (w, 0), (w, h), (255, 255, 255), 2)
+            out.write(combined)
+            frame_count += 1
+        cap1.release()
+        cap2.release()
+        out.release()
+
+        if frame_count == 0:
+            return None
+
+        # encode web
+        fixed_output = output_path.replace(".mp4", "_fixed.mp4")
+
+        os.system(
+            f'ffmpeg -y -i "{output_path}" -vcodec libx264 -crf 23 -preset fast -pix_fmt yuv420p "{fixed_output}"'
+        )
+
+        if os.path.exists(fixed_output):
+            return fixed_output
+
+        return output_path
+def evaluate_videos(input_videos):
+    print("\n===== RESULT TABLE =====")
+    print("Video | Mean Before | Std Before | Mean After | Std After")
+    print("----------------------------------------------------------")
+
+    for idx, input_path in enumerate(input_videos):
+        print(f"\nProcessing Video {idx+1}...")
+
+        stabilized_path = f"output_{idx+1}.mp4"
+
+        final_output = stabilize_video(input_path, stabilized_path)
+
+        if final_output is None:
+            print(f"Video {idx+1} ERROR")
+            continue
+
+        # đo trước
+        mean_before, std_before = measure_shakiness(input_path)
+
+        # đo sau
+        mean_after, std_after = measure_shakiness(final_output)
+
+        # tránh None
+        if mean_before is None: mean_before = 0
+        if std_before is None: std_before = 0
+        if mean_after is None: mean_after = 0
+        if std_after is None: std_after = 0
+        # in ra bảng
+        print(f"{idx+1}     | {mean_before:.3f}       | {std_before:.3f}      | {mean_after:.3f}      | {std_after:.3f}")

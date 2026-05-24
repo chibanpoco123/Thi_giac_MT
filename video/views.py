@@ -10,6 +10,10 @@ def home(request):
     input_video = None
     compare_video = None
     score = None
+    before_mean = None
+    before_std = None
+    after_mean = None
+    after_std = None
 
     if request.method == 'POST' and request.FILES.get('video'):
         video_file = request.FILES['video']
@@ -37,7 +41,7 @@ def home(request):
         before_mean, before_std = measure_shakiness(input_path)
 
         # ===== STABILIZE =====
-        result = stabilize_video(input_path, output_path)
+        result = stabilize_video(input_path, output_path) 
 
         if result and os.path.exists(result):
 
@@ -67,5 +71,9 @@ def home(request):
         'output_video': output_video,
         'input_video': input_video,
         'compare_video': compare_video,
-        'score': score
+        'score': score,
+        'before_mean': before_mean,
+        'before_std': before_std,
+        'after_mean': after_mean,
+        'after_std': after_std
     })
